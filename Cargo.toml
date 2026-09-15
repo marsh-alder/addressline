@@ -1,0 +1,8 @@
+[package]
+name = "addressline"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Parse and normalize single-line US postal addresses"
+
+[dependencies]
