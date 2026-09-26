@@ -19,10 +19,14 @@ assert_eq!(addr.city, "Cupertino");
 assert_eq!(addr.state, "CA");
 ```
 
-`parse_line` returns `Result<Address, ParseError>`. It only accepts the
+`parse_line` returns `Result<Address, ParseError>`. It accepts the
 `STREET, CITY, STATE ZIP` shape — three comma-separated fields, with the
-state and zip as the last two whitespace-separated tokens. It normalizes
-the state code to upper case but leaves street and city casing alone.
+state and zip as the last two whitespace-separated tokens — or a four-field
+`STREET, UNIT, CITY, STATE ZIP` shape when an apartment, unit, or suite is
+broken out on its own. An apartment/unit folded directly into the street
+text (`12 Elm St Apt 4`) is left alone and stays part of `street`. It
+normalizes the state code to upper case but leaves street, unit, and city
+casing alone.
 
 ## CLI
 
@@ -62,6 +66,6 @@ The process exits non-zero if any line failed to parse.
 
 ## Status
 
-Early. Only the plain `STREET, CITY, STATE ZIP` shape is handled — see the
-open questions in the issue tracker for what's next (apartment/unit
-numbers, multi-line input, non-US addresses).
+Early. Handles the plain `STREET, CITY, STATE ZIP` shape and an optional
+unit field — see the open questions in the issue tracker for what's next
+(CSV output, recipient name lines, non-US addresses).

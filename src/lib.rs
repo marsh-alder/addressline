@@ -3,8 +3,13 @@
 //! The expected shape is `STREET, CITY, STATE ZIP`, e.g.
 //! `12 Elm St, Springfield, IL 62704`. That's the format most CSV exports
 //! and address-book dumps already use, so the parser doesn't try to guess
-//! at anything fancier (no multi-line recipient blocks, no apartment-number
-//! heuristics). Garbage in gets a specific `ParseError` back, not a guess.
+//! at anything fancier (no multi-line recipient blocks). Garbage in gets a
+//! specific `ParseError` back, not a guess.
+//!
+//! An apartment, unit, or suite can ride along either inline in the street
+//! field (`12 Elm St Apt 4`) or as its own comma-separated field between
+//! street and city (`12 Elm St, Apt 4, Springfield, IL 62704`); the latter
+//! form is split out into `Address::unit`.
 
 use std::fmt;
 
@@ -12,6 +17,10 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Address {
     pub street: String,
+    /// Apartment/unit/suite, if it was given as its own comma-separated
+    /// field. Unit text folded into the street field (`"12 Elm St Apt 4"`)
+    /// stays in `street` and leaves this `None`.
+    pub unit: Option<String>,
     pub city: String,
     /// Always a two-letter USPS code, upper case.
     pub state: String,
@@ -21,13 +30,18 @@ pub struct Address {
 
 impl fmt::Display for Address {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}, {}, {} {}", self.street, self.city, self.state, self.zip)
+        match &self.unit {
+            Some(unit) => {
+                write!(f, "{}, {}, {}, {} {}", self.street, unit, self.city, self.state, self.zip)
+            }
+            None => write!(f, "{}, {}, {} {}", self.street, self.city, self.state, self.zip),
+        }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
-    /// Didn't find exactly three comma-separated fields.
+    /// Didn't find three or four comma-separated fields.
     Format,
     /// Trailing field wasn't `STATE ZIP`.
     MissingZip,
@@ -35,16 +49,17 @@ pub enum ParseError {
     UnknownState(String),
     /// ZIP isn't `NNNNN` or `NNNNN-NNNN`.
     InvalidZip(String),
-    /// Street or city field was empty after trimming.
+    /// Street, unit, or city field was empty after trimming.
     EmptyField(&'static str),
 }
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ParseError::Format => {
-                write!(f, "expected \"street, city, state zip\" (three comma-separated fields)")
-            }
+            ParseError::Format => write!(
+                f,
+                "expected \"street, city, state zip\" or \"street, unit, city, state zip\""
+            ),
             ParseError::MissingZip => write!(f, "last field must be \"STATE ZIP\""),
             ParseError::UnknownState(s) => write!(f, "unknown state code: {s:?}"),
             ParseError::InvalidZip(z) => write!(f, "invalid zip code: {z:?}"),
@@ -55,15 +70,22 @@ impl fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
-/// Parse a single address line of the form `STREET, CITY, STATE ZIP`.
+/// Parse a single address line of the form `STREET, CITY, STATE ZIP`, or
+/// `STREET, UNIT, CITY, STATE ZIP` if an apartment/unit/suite is broken out
+/// into its own field.
 pub fn parse_line(line: &str) -> Result<Address, ParseError> {
     let fields: Vec<&str> = line.trim().split(',').map(str::trim).collect();
-    let [street, city, tail] = fields.as_slice() else {
-        return Err(ParseError::Format);
+    let (street, unit, city, tail) = match fields.as_slice() {
+        [street, city, tail] => (*street, None, *city, *tail),
+        [street, unit, city, tail] => (*street, Some(*unit), *city, *tail),
+        _ => return Err(ParseError::Format),
     };
 
     if street.is_empty() {
         return Err(ParseError::EmptyField("street"));
+    }
+    if unit.is_some_and(str::is_empty) {
+        return Err(ParseError::EmptyField("unit"));
     }
     if city.is_empty() {
         return Err(ParseError::EmptyField("city"));
@@ -85,6 +107,7 @@ pub fn parse_line(line: &str) -> Result<Address, ParseError> {
 
     Ok(Address {
         street: street.to_string(),
+        unit: unit.map(str::to_string),
         city: city.to_string(),
         state,
         zip: zip.to_string(),
@@ -143,6 +166,43 @@ mod tests {
     #[test]
     fn rejects_missing_field() {
         assert_eq!(parse_line("12 Elm St, Springfield"), Err(ParseError::Format));
+    }
+
+    #[test]
+    fn parses_unit_as_its_own_field() {
+        let addr = parse_line("12 Elm St, Apt 4, Springfield, IL 62704").unwrap();
+        assert_eq!(addr.street, "12 Elm St");
+        assert_eq!(addr.unit.as_deref(), Some("Apt 4"));
+        assert_eq!(addr.city, "Springfield");
+    }
+
+    #[test]
+    fn unit_folded_into_street_stays_none() {
+        let addr = parse_line("12 Elm St Apt 4, Springfield, IL 62704").unwrap();
+        assert_eq!(addr.street, "12 Elm St Apt 4");
+        assert_eq!(addr.unit, None);
+    }
+
+    #[test]
+    fn rejects_empty_unit_field() {
+        assert_eq!(
+            parse_line("12 Elm St, , Springfield, IL 62704"),
+            Err(ParseError::EmptyField("unit"))
+        );
+    }
+
+    #[test]
+    fn rejects_too_many_fields() {
+        assert_eq!(
+            parse_line("12 Elm St, Apt 4, Springfield, IL, 62704"),
+            Err(ParseError::Format)
+        );
+    }
+
+    #[test]
+    fn display_includes_unit_when_present() {
+        let addr = parse_line("12 Elm St, Apt 4, Springfield, IL 62704").unwrap();
+        assert_eq!(addr.to_string(), "12 Elm St, Apt 4, Springfield, IL 62704");
     }
 
     #[test]
